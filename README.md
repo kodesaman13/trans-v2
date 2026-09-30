@@ -1,8 +1,8 @@
 # Arabic Invoice Extraction - Version 1
 
 This repository contains the existing Version 1 FastAPI pipeline with Arabic-aware
-field matching layered onto Azure Document Intelligence. The active OCR path remains
-Azure's `prebuilt-document` model; Arabic values are returned without translation.
+field matching layered onto an asynchronous FastOCR document flow. FastOCR is the
+OCR provider for document and invoice extraction.
 
 ## Configuration
 
@@ -58,14 +58,15 @@ Open Swagger at <http://127.0.0.1:8000/docs>.
 ```
 
 The document ID selects the active `document_type_master` row and its
-`extraction_rules_json`. Configured pages are sliced before Azure OCR. With empty
-rules, the complete uploaded document is sent to Azure. The API returns validation
-rows and an XLSX download URL; raw Azure JSON is written to `Json/`.
+`extraction_rules_json`. The uploaded document is sent to the selected OCR
+provider, then the existing extraction rules and validation pipeline runs. The API
+returns validation rows and an XLSX download URL; normalized OCR JSON is written
+to `Json/`.
 
-## Optional FastOCR provider
+## FastOCR provider
 
-The existing Azure provider remains the default. To use the asynchronous FastOCR
-flow for `/ocr/upload`, set these environment variables before starting the API:
+FastOCR is the default OCR provider. Configure its asynchronous flow through the
+runtime environment:
 
 ```bash
 export OCR_PROVIDER=fastocr
@@ -73,6 +74,9 @@ export FASTOCR_API_KEY="<fastocr-api-key>"
 # Optional: FASTOCR_BASE_URL, FASTOCR_REQUEST_TIMEOUT,
 # FASTOCR_POLL_INTERVAL, FASTOCR_POLL_TIMEOUT
 ```
+
+When `FASTOCR_API_KEY`/`FASTOCR_KEY` is missing, the upload returns a
+configuration error rather than silently using another OCR provider.
 
 FastOCR jobs are created, uploaded to their presigned URL with the detected
 content type, started, polled with a bounded timeout, and then downloaded as
