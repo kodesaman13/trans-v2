@@ -19,6 +19,17 @@ from document_service import *
 from ML.JsonTransformation import process
 from fastocr_client import FastOCRError, FastOCRClient
 
+
+DEFAULT_ARABIC_INVOICE_RULES = {
+    "document_type": "arabic_invoice",
+    "pages": {
+        "*": [
+            "invoice_number", "invoice_date", "total",
+            "vendor_name", "vat_number", "currency", "subtotal", "tax",
+        ],
+    },
+}
+
 app = FastAPI()
 
 ocr_router = APIRouter(prefix="/ocr", tags=["OCR"])
@@ -104,6 +115,75 @@ def _fastocr_process_upload(filename, content, content_type, pages_to_extract):
     return results
 
 
+def _region_from_spec(spec):
+    region = spec.get("region") or spec.get("bbox")
+    if not isinstance(region, (list, tuple)) or len(region) != 4:
+        return None
+    try:
+        values = tuple(float(value) for value in region)
+    except (TypeError, ValueError):
+        return None
+    if any(value < 0 or value > 1 for value in values):
+        return None
+    x, y, width, height = values
+    if width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
+        return None
+    return values
+
+
+def _fastocr_process_with_regions(content, filename, page_specs):
+    """OCR only normalized field regions when rules provide [x, y, width, height]."""
+    import fitz
+
+    document = fitz.open(stream=content, filetype="pdf")
+    client = FastOCRClient.from_environment()
+    results = []
+    for page_number, specs in sorted(page_specs.items()):
+        if page_number < 1 or page_number > len(document):
+            continue
+        page = document[page_number - 1]
+        page_width, page_height = page.rect.width, page.rect.height
+        for spec in specs:
+            region = _region_from_spec(spec)
+            if not region:
+                continue
+            x, y, width, height = region
+            rect = fitz.Rect(
+                x * page_width,
+                y * page_height,
+                (x + width) * page_width,
+                (y + height) * page_height,
+            )
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect, alpha=False)
+            results.append((
+                page_number,
+                client.process_file(
+                    f"{os.path.splitext(filename)[0]}-p{page_number}-{spec['name']}.png",
+                    pixmap.tobytes("png"),
+                    "image/png",
+                ),
+            ))
+    document.close()
+    return results
+
+
+def _expand_all_page_rules(rules, content, filename):
+    """Expand a '*' page rule after the PDF page count is known."""
+    if not isinstance(rules, dict) or not isinstance(rules.get("pages"), dict):
+        return rules
+    pages = rules["pages"]
+    wildcard = pages.get("*")
+    if wildcard is None:
+        return rules
+    if filename.lower().endswith(".pdf"):
+        page_count = len(PdfReader(io.BytesIO(content)).pages)
+    else:
+        page_count = 1
+    expanded = {str(page): wildcard for page in range(1, page_count + 1)}
+    expanded.update({key: value for key, value in pages.items() if key != "*"})
+    return {**rules, "pages": expanded}
+
+
 @ocr_router.get("/documents")
 def get_docs():
     return get_active_documents()
@@ -116,6 +196,30 @@ def create_doc(payload: dict = Body(...)):
     rules    = payload.get("rules", {})
     document_id = create_document(name, category, rules)
     return {"status": "created", "document_id": document_id}
+
+
+def _resolve_document_template(payload):
+    document_id = payload.get("document_id")
+    document_type = payload.get("document_type")
+    if document_id or not document_type:
+        return document_id
+
+    template_name = str(document_type).strip()
+    document = get_document_by_name(template_name, "Invoice")
+    if document:
+        if template_name.casefold() == "arabic_invoice":
+            update_document(
+                document["document_id"],
+                {"extraction_rules_json": DEFAULT_ARABIC_INVOICE_RULES},
+            )
+        return document["document_id"]
+    if template_name.casefold() == "arabic_invoice":
+        return create_document(
+            "arabic_invoice",
+            "Invoice",
+            DEFAULT_ARABIC_INVOICE_RULES,
+        )
+    raise ValueError(f"document template not found: {template_name}")
 
 
 @ocr_router.put("/documents/{doc_id}")
@@ -157,7 +261,10 @@ def upload_file(payload: dict = Body(...)):
                 if os.path.isfile(file_path):
                     os.remove(file_path)
 
-        document_id = payload.get("document_id")
+        try:
+            document_id = _resolve_document_template(payload)
+        except Exception as exc:
+            return {"status": "error", "message": f"document template lookup failed: {exc}"}
         filename    = payload.get("filename")
         file_base64 = payload.get("file")
 
@@ -220,6 +327,9 @@ def upload_file(payload: dict = Body(...)):
                 else:
                     rules = {}
 
+                with open(input_path, "rb") as uploaded_file:
+                    upload_bytes = uploaded_file.read()
+                rules = _expand_all_page_rules(rules, upload_bytes, filename)
                 from ML.JsonTransformation import parse_extraction_rules
                 page_fields_map = parse_extraction_rules(rules)
                 rule_items = []
@@ -416,16 +526,26 @@ def upload_file(payload: dict = Body(...)):
             rules = {}
 
         from ML.JsonTransformation import parse_extraction_rules
+        from ML.JsonTransformation import parse_extraction_rule_specs
         page_fields_map = parse_extraction_rules(rules)
         pages_to_extract = sorted(page_fields_map.keys()) if page_fields_map else None
 
         searchable_pdf_path = None
         try:
-            with open(input_path, "rb") as uploaded_file:
-                upload_bytes = uploaded_file.read()
-            fastocr_results = _fastocr_process_upload(
-                filename, upload_bytes, _content_type(filename), pages_to_extract
+            page_specs = parse_extraction_rule_specs(rules)
+            has_regions = any(
+                _region_from_spec(spec)
+                for specs in page_specs.values()
+                for spec in specs
             )
+            if has_regions and filename.lower().endswith(".pdf"):
+                fastocr_results = _fastocr_process_with_regions(
+                    upload_bytes, filename, page_specs
+                )
+            else:
+                fastocr_results = _fastocr_process_upload(
+                    filename, upload_bytes, _content_type(filename), pages_to_extract
+                )
             json_path = os.path.join(JSON_DIR, f"{os.path.splitext(filename)[0]}.json")
             with open(json_path, "w", encoding="utf-8") as json_file:
                 json.dump(_fastocr_json_by_page(fastocr_results), json_file, ensure_ascii=False)

@@ -59,6 +59,25 @@ def get_document_by_id(document_id):
     return data
 
 
+def get_document_by_name(document_name, category=None):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    query = """
+        SELECT * FROM document_type_master
+        WHERE document_name=%s AND is_active='Y'
+    """
+    params = [document_name]
+    if category:
+        query += " AND document_category=%s"
+        params.append(category)
+    query += " ORDER BY document_id LIMIT 1"
+    cursor.execute(query, tuple(params))
+    data = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return data
+
+
 def create_document(document_name, category, rules_json):
     conn   = get_connection()
     cursor = conn.cursor()

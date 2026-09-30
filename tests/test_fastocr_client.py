@@ -3,7 +3,8 @@ import unittest
 from itertools import repeat
 from unittest.mock import patch
 
-from api_json import _fastocr_json_by_page
+from api_json import _expand_all_page_rules, _fastocr_json_by_page, _region_from_spec
+from api_json import DEFAULT_ARABIC_INVOICE_RULES
 from fastocr_client import FastOCRClient
 
 
@@ -27,6 +28,19 @@ class FastOCRClientTests(unittest.TestCase):
         data = _fastocr_json_by_page([(3, result)])[0]
         self.assertEqual(data["pages_analyzed"], [3])
         self.assertEqual(data["page_lines"][0]["page_number"], 3)
+
+    def test_region_rules_require_normalized_positive_rectangle(self):
+        self.assertEqual(_region_from_spec({"region": [0.1, 0.2, 0.3, 0.4]}), (0.1, 0.2, 0.3, 0.4))
+        self.assertIsNone(_region_from_spec({"region": [0.8, 0.2, 0.3, 0.4]}))
+
+    def test_default_arabic_template_has_page_specific_fields(self):
+        self.assertIn("*", DEFAULT_ARABIC_INVOICE_RULES["pages"])
+
+    def test_wildcard_rules_expand_to_all_pdf_pages(self):
+        expanded = _expand_all_page_rules(
+            {"pages": {"*": ["total"]}}, b"not-a-pdf", "invoice.png"
+        )
+        self.assertEqual(expanded["pages"], {"1": ["total"]})
 
     @patch("fastocr_client.time.sleep")
     @patch("fastocr_client.urlopen")

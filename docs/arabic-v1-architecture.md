@@ -52,6 +52,11 @@ legacy `{page: [field_name]}` shape for page slicing and existing consumers.
 `parse_extraction_rule_specs()` supplies aliases and validation metadata to the
 field matcher.
 
+Typed fields may additionally provide a normalized `region` or `bbox` in
+`[x, y, width, height]` form. Those coordinates enable true field-region OCR;
+without them, FastOCR receives the selected page because field labels alone do
+not identify coordinates before OCR.
+
 ## Page and database mapping
 
 Configured pages are sliced before OCR. Results retain original page numbers.

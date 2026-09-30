@@ -7,5 +7,6 @@ mysql-connector-python
 azure-ai-formrecognizer
 azure-core
 PyPDF2
+pymupdf
 python-multipart
 reportlab
