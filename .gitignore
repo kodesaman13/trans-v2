@@ -1,0 +1,16 @@
+Azure/Credentials.json
+db.local.py
+.env
+.env.*
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+Input/*
+Json/*
+Output/*
+ExtractedInput/*
+tests/baseline_english/
+tests/updated_v1/
+!.gitkeep

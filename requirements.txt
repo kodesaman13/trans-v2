@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+Pillow
+pandas
+openpyxl
+mysql-connector-python
+azure-ai-formrecognizer
+azure-core
+PyPDF2
+python-multipart
+reportlab
